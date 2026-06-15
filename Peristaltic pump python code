@@ -1,0 +1,23 @@
+import serial
+import time
+# Opening the serial connection:
+ser = serial.Serial('port', 9600) # (port, baudrate) - Make sure to change those to the user's values
+time.sleep(2) # Time for arduino to reset
+
+# Main loop
+while True:
+    # Input information and choice
+    choice = input(
+        "Input the Pump of choice and transferred volume in form of (pump,volume)\n"
+        "Alternatively, to reverse a specific motor, input: (R,pump)\n"
+        "Type E to quit\n")
+
+    # Exiting the program
+    if choice.upper() == "E":
+        break
+
+    choice = choice.strip() # Remove spaces
+
+    ser.write((choice + "\n").encode()) # Sends the information over to arduino. It formats the input in form of pump,volume/n where /n indicates the end of one 'message'. encode() converts the data into bytes
+
+ser.close() # Closing the serial connection
