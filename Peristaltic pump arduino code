@@ -1,0 +1,141 @@
+/* Arduino Code for control of Grove I2C motor drivers for peristaltic pumps */
+ 
+#include <Wire.h>
+#include "Grove_I2C_Motor_Driver.h"
+ 
+#define DRIVER_1_ADDR 0x0f
+#define DRIVER_2_ADDR 0x0a
+ 
+#define PUMP_A MOTOR1
+#define PUMP_B MOTOR2
+#define PUMP_C MOTOR1
+#define PUMP_D MOTOR2
+ 
+// --- CALIBRATION FACTORS (mL per millisecond) ---
+const float PUMP_A_CAL = 0.00123;
+const float PUMP_B_CAL = 0.00127;
+const float PUMP_C_CAL = 0.00125;
+const float PUMP_D_CAL = 0.00125;
+
+
+void loop(){
+
+  // Check if Python has sent anything
+  if (Serial.available() > 0)
+  {
+    // Reading the input line
+    String incomingData = Serial.readStringUntil('\n');
+
+    incomingData.trim(); // Remove whitespace characters
+
+    // Reverse command. Input = (R, pump), where R reverses the direction of the motor
+    if (incomingData.startsWith("R,")){
+      char selected_pump = 
+        toupper(incomingData.charAt(2)); // Convert the pump selection to upper case
+
+      reverse_pump(selected_pump);
+
+      return;
+    }
+
+    // Normal dispension. Input = (pump, volume)
+    int commaPosition = incomingData.indexOf(',');
+
+    // Reading the input; the condition of the loop ensures the input is in the correct (pump, vol) format by checking for the comma
+    if (commaPosition != -1)
+    {
+      // First character: pump name (make capital)
+      char selected_pump = toupper(incomingData.charAt(0));
+
+      // Everything after the comma: volume
+      String volumeText = incomingData.substring(commaPosition + 1);
+
+      // Convert the text into a number
+      float volume = volumeText.toFloat();
+
+      // Run the chosen pump
+      run_pump(selected_pump, volume);
+    }
+  }
+}
+
+// Runing the pump with chosen volume
+void run_pump (char selected_pump, float volume){
+  float cal_factor;
+  int driver_address;
+  int motor_channel;
+
+  // Pump selection
+  if (selected_pump == 'A'){
+    cal_factor = PUMP_A_CAL; // Selects the calibration factor from the list above
+    driver_address = DRIVER_1_ADDR; // Chooses the address corresponding to the pump
+    motor_channel = PUMP_A; // Chooses the appropriate pump using it's assigned motor channel
+  }
+
+  else if (selected_pump == 'B'){
+    cal_factor = PUMP_B_CAL;
+    driver_address = DRIVER_1_ADDR;
+    motor_channel = PUMP_B;
+  }
+  
+  else if (selected_pump == 'C'){
+    cal_factor = PUMP_C_CAL;
+    driver_address = DRIVER_2_ADDR;
+    motor_channel = PUMP_C;
+  }
+
+  else if (selected_pump == 'D'){
+    cal_factor = PUMP_D_CAL;
+    driver_address = DRIVER_2_ADDR;
+    motor_channel = PUMP_D;
+  }
+
+  else{
+    return;
+  }
+
+  // Calculate the required run time in milliseconds
+  float runTime_ms = volume / cal_factor; // float/unsigned long ???
+
+  // Running the motor
+  Motor.begin(driver_address);
+  Motor.speed(motor_channel, 255);
+  delay(runTime_ms);
+  Motor.speed(motor_channel, 0);
+}
+
+// Reverse dispension
+void reverse_pump(char selected_pump){
+  int driver_address;
+  int motor_channel;
+
+  if (selected_pump == 'A'){
+    driver_address = DRIVER_1_ADDR;
+    motor_channel = PUMP_A;
+  }
+
+  else if (selected_pump == 'B'){
+    driver_address = DRIVER_1_ADDR;
+    motor_channel = PUMP_B;
+  }
+
+  else if (selected_pump == 'C'){
+    driver_address = DRIVER_2_ADDR;
+    motor_channel = PUMP_C;
+  }
+
+  else if (selected_pump == 'D'){
+    driver_address = DRIVER_2_ADDR;
+    motor_channel = PUMP_D;
+  }
+  else{
+    return;
+  }
+
+  Motor.begin(driver_address);
+  Motor.speed(motor_channel, -255); // Negative value compared to usual '255' = backwards operation
+  delay(180000); // Change that later to a proper value (just use runTime_ms????)
+  Motor.speed(motor_channel, 0);
+}
+
+}
