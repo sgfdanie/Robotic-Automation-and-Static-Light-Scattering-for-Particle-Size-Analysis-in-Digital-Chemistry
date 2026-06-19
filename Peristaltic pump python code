@@ -1,23 +1,50 @@
+# Imports
 import serial
 import time
-# Opening the serial connection:
-ser = serial.Serial('port', 9600) # (port, baudrate) - Make sure to change those to the user's values
-time.sleep(2) # Time for arduino to reset
+
+# Open serial connection
+ser = serial.Serial("COM3", 9600)
+time.sleep(2)
 
 # Main loop
 while True:
+    
     # Input information and choice
     choice = input(
-        "Input the Pump of choice and transferred volume in form of (pump,volume)\n"
-        "Alternatively, to reverse a specific motor, input: (R,pump)\n"
-        "Type E to quit\n")
+        "\nCommands:\n"
+        "A, B, C, D: dispense forward\n"
+        "RA, RB, RC, RD: dispense reverse\n"
+        "SA, SB, SC, SD: stop one pump\n"
+        "S: stop all pumps\n"
+        "E: stop all pumps and exit\n").strip().upper()
+    
+    # Stop all pumps
+    if choice == "S":
+        ser.write(b"S\n")
+        print("Stopping all pumps")
 
-    # Exiting the program
-    if choice.upper() == "E":
+    # Exit program
+    elif choice == "E":
+        ser.write(b"S\n") # Stops all pumps before exiting
+        print ("Stopping all pumps and closing the connection")
         break
 
-    choice = choice.strip() # Remove spaces
+    # Stop a selected pump
+    elif choice in ["SA", "SB", "SC", "SD"]:
+        ser.write((choice + "\n").encode())
+        print(f"Stopping pump {choice[1]}")
 
-    ser.write((choice + "\n").encode()) # Sends the information over to arduino. It formats the input in form of pump,volume/n where /n indicates the end of one 'message'. encode() converts the data into bytes
+    # Selecting the reverse dispension
+    elif choice in ["A", "B", "C", "D", "RA", "RB", "RC", "RD"]:
+
+        volume = input("Volume (mL): ").strip()
+        serial_command = f"{choice},{volume}" # Joins both pump choice and volume choice into one string to be later sent to arduino through pyserial
+        ser.write((serial_command + "\n").encode()) # Sends the information over to arduino. It formats the input in form of pump,volume/n where /n indicates the end of one 'message'. encode() converts the data into bytes
+
+        pump = choice.removeprefix("R")
+        print(f"{volume}mL is being dispensed through pump {pump}")
+
+    else:
+        print("Invalid command")
 
 ser.close() # Closing the serial connection
