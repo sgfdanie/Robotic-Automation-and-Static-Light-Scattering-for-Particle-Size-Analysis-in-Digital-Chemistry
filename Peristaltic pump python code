@@ -1,10 +1,109 @@
 # Imports
 import serial
 import time
+import json
+from datetime import datetime
+import csv
+
+# Calibration factors taken from experimental set-up (volume transferred(mL)/time taken(ms))
+CAL = {
+    "A": 0.00123,
+    "B": 0.00127,
+    "C": 0.00125,
+    "D": 0.00125
+}
+
+# Dictionary to track active pumps
+# Each pump entry stores: start time, target volume and direction(forwards/backwards)
+active_pumps = {}
+
+# CSV set-up -------------------------------------------------------
+
+# Creating a new CSV file if it does not already exist
+# "x" makes a new file and raises an error if it does exist
+try:
+    with open("pump_log.csv", "x", newline="") as file:
+
+        writer = csv.writer(file)
+
+        # Writing the headings
+        writer.writerow(["timestamp", "pump", "volume_ml", "completed"])
+
+# If the file already exists, pass
+except FileExistsError:
+    pass
+
+# Defining the CSV function to be called later in the code.
+# Adds 1 dispensing event to the CSV log
+def save_csv_log(pump, volume, completed):
+
+    # Open the CSV file in append mode(add entries to it without overwriting the existing ones)
+    with open("pump_log.csv", "a", newline="") as file:
+
+        writer = csv.writer(file)
+
+        # Add one row with: timestamp, pump used, volume transferred and whether the transfer occured with no interruptions
+        writer.writerow([
+            datetime.now().isoformat(),
+            pump,
+            round(volume, 2),
+            completed
+        ])
+
+
+# JSON set-up -------------------------------------------------------
+
+# Loading the JSON log file; if it doesnt exist, the code will create a default structure
+def load_JSON_log():
+
+    try:
+        with open("pump_log.json", "r") as file:
+            return json.load(file)
+    except FileNotFoundError:
+
+        return {
+            "totals": {"A" : 0, "B" : 0, "C" : 0, "D" : 0}, # Dictionary storing all individual transferred volume values
+            "total_volume_dispensed": 0, # Running total volume across all pumps
+            "events": [] # List containing individual transfer events
+        }
+
+# Saving the JSON data
+def save_JSON_log(data):
+
+    with open("pump_log.json", "w") as file:
+        json.dump(data, file, indent=4)
+
+# Logging a transfer event
+# Code updates the totals and records an individual event
+def log_transfer(pump, volume, completed):
+
+    # Loadinf the current JSON data
+    data = load_JSON_log()
+    
+    # Adding volume to the individual totals
+    data["totals"][pump] += volume
+
+    # Adding volume to the overall total
+    data["total_volume_dispensed"] += volume
+    
+    # Recording the individual transfer
+    data["events"].append({
+        "timestamp": datetime.now().isoformat(), # Timestamp of the event
+        "pump": pump, # Used pump
+        "volume_mL": round(volume, 2), # Transferred volume
+        "completed": completed, # True if naturally completed; False if stopped or interrupted
+        "direction": "reverse" if volume < 0 else "forward" # Forwards/reverse direction
+    })
+
+    # Saving to both JSON and 
+    save_JSON_log(data) 
+    save_csv_log(pump, volume, completed)
+
+# Pyserial loop ---------------------------------------------------------------------
 
 # Open serial connection
-ser = serial.Serial("COM3", 9600)
-time.sleep(2)
+ser = serial.Serial("port", 9600) # replace "port" with the actual Arduino port
+time.sleep(2) # Time for Arduino to reset after opening the serial port
 
 # Main loop
 while True:
@@ -18,33 +117,98 @@ while True:
         "S: stop all pumps\n"
         "E: stop all pumps and exit\n").strip().upper()
     
-    # Stop all pumps
+    # Stop all pumps -------------------------------------------------------------------
     if choice == "S":
-        ser.write(b"S\n")
+        current_time = time.time() # Records current time
+
+        # Loop through every currently running pump
+        for pump in list(active_pumps.keys()):
+            
+            # Calculate the elapsed time in ms
+            elapsed_time = (current_time - active_pumps[pump]["start_time"]) * 1000
+
+            # Calculate the actual transferred volume using the calibration factor equation
+            # Reverse transfers become negative
+            actual_volume = (elapsed_time * CAL[pump] * active_pumps[pump]["direction"])
+
+            # log the partial transfer
+            log_transfer(pump, actual_volume, completed= False)
+        
+        active_pumps.clear() # Removes all pumps from being actively tracked
+        ser.write(b"S\n") # Sending a stop command to arduino
         print("Stopping all pumps")
 
-    # Exit program
+    # Exit program --------------------------------------------------------------------------
     elif choice == "E":
+
+        current_time = time.time() # Records current time
+
+        # Log all pumps before exiting
+        for pump in list(active_pumps.keys()):
+            
+            # Calculate the elapsed time in ms
+            elapsed_time = (current_time - active_pumps[pump]["start_time"]) * 1000
+
+            # Calculate the actual transferred volume using the calibration factor equation
+            # Reverse transfers become negative
+            actual_volume = (elapsed_time * CAL[pump] * active_pumps[pump]["direction"])
+            
+            # log the partial transfer
+            log_transfer(pump, actual_volume, completed= False)
+        
+        active_pumps.clear() # Removes all pumps from being actively tracked
         ser.write(b"S\n") # Stops all pumps before exiting
         print ("Stopping all pumps and closing the connection")
         break
 
-    # Stop a selected pump
+    # Stop a selected pump -------------------------------------------------------------------
     elif choice in ["SA", "SB", "SC", "SD"]:
-        ser.write((choice + "\n").encode())
-        print(f"Stopping pump {choice[1]}")
 
-    # Selecting the reverse dispension
+        pump = choice[1] # Separates the pump choice from the stop command (e.g. SA --> A)
+        
+        # Calculate the volume only if the pump is being currently tracked
+        if pump in active_pumps:
+
+            # Calculate the elapsed time in ms
+            elapsed_time = (time.time() - active_pumps[pump]["start_time"]) * 1000
+
+            # Calculate the actual transferred volume using the calibration factor equation
+            # Reverse transfers become negative
+            actual_volume = (elapsed_time * CAL[pump] * active_pumps[pump]["direction"])
+            
+            # log the partial transfer
+            log_transfer(pump, actual_volume, completed= False)
+
+            del active_pumps[pump] # Remoces the pump from the active list
+        ser.write((choice + "\n").encode()) # Sends a stop command to arduino
+        print(f"Stopping pump {pump}")
+
+    # Selecting the pump, volume and direction -------------------------------------------
     elif choice in ["A", "B", "C", "D", "RA", "RB", "RC", "RD"]:
 
-        volume = input("Volume (mL): ").strip()
+        # Selecting the Volume
+        volume = float(input("Volume (mL): ").strip())
+
         serial_command = f"{choice},{volume}" # Joins both pump choice and volume choice into one string to be later sent to arduino through pyserial
+        
         ser.write((serial_command + "\n").encode()) # Sends the information over to arduino. It formats the input in form of pump,volume/n where /n indicates the end of one 'message'. encode() converts the data into bytes
 
-        pump = choice.removeprefix("R")
+        pump = choice.removeprefix("R") # Removes the R prefix if its present (e.g. RA --> A)
+
+        direction = -1 if choice.startswith("R") else 1 # Stores the dispensing direction (Forwards: 1, Reverse: -1)
+
+        # Storing the information about the running pump
+        active_pumps[pump] = {
+            "start_time": time.time(), # Time-stamp
+            "target_volume": volume, # Selected volume
+            "direction": direction # Direction
+        }
+
         print(f"{volume}mL is being dispensed through pump {pump}")
 
+    # In case of invalid input, the program informs the user of the error
     else:
         print("Invalid command")
 
-ser.close() # Closing the serial connection
+# Closing the serial connection before exiting
+ser.close()
