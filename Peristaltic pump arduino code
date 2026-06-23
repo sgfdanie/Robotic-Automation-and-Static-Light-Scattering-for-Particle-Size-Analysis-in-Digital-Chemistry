@@ -108,19 +108,40 @@ void stopAllPumps(){
 // -------------------------------- Verifying the runtime----------------------------------------
 
 void updateSinglePump(pumpStat* pump){
-
   // If the pump is still running, check the timer
   if (pump->running == true){
-    // Check if the pump time is finished
-    if (millis() >= pump->stopTime){
-      // Stop the motor
-      Motor.begin(pump->driver_address);
-      Motor.speed(pump->motor_channel, 0);
+    return;
+  }
+  // Check if the pump time is finished
+  if (millis() >= pump->stopTime){
+    // Stop the motor
+    Motor.begin(pump->driver_address);
+    Motor.speed(pump->motor_channel, 0);
 
-      pump->running = false; // Updates the software state when the motor stops running
+    pump->running = false; // Updates the software state when the motor stops running
+
+    if (pump == &pumpA)
+    {
+      Serial.println("DONE,A");
+    }
+
+    else if (pump == &pumpB)
+    {
+      Serial.println("DONE,B");
+    }
+
+    else if (pump == &pumpC)
+    {
+      Serial.println("DONE,C");
+    }
+
+    else if (pump == &pumpD)
+    {
+      Serial.println("DONE,D");
     }
   }
 }
+
 
 // -----------------------------------Runtime update-------------------------------------
 void updatePumpTimers(){
