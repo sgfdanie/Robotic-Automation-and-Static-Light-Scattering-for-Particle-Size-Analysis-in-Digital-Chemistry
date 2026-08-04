@@ -1,0 +1,319 @@
+# -----------------------------------------------------------------------------
+# Imports
+# -----------------------------------------------------------------------------
+
+import serial
+import time
+import json
+import csv
+import threading
+from datetime import datetime
+
+# -----------------------------------------------------------------------------
+# Calibration factors for Volume to runtime conversion
+# -----------------------------------------------------------------------------
+# These values have been experimentally derived to allow for a volume to runtime conversion
+
+CAL = {"A": 0.00123, "B": 0.00127, "C": 0.00125, "D": 0.00125}
+
+# -----------------------------------------------------------------------------
+# Drop-wise-dispension stop dictionary
+# -----------------------------------------------------------------------------
+# The variables stored are threading events used to interrupt dropwise dispensing.
+# Each pump has its own Event object so that a single pump can be stopped without affecting the others.
+
+dropwise_stop = {
+    "A": threading.Event(),
+    "B": threading.Event(),
+    "C": threading.Event(),
+    "D": threading.Event()
+}
+
+# -----------------------------------------------------------------------------
+# Fake serial connection for testing
+# -----------------------------------------------------------------------------
+# When uncommented, allows the user to test the code changes remotely
+
+# class FakeSerial:
+
+#     def write(self, data):
+#         print("FAKE ARDUINO RECEIVED:", data.decode().strip())
+
+
+# ser = FakeSerial()
+
+# -----------------------------------------------------------------------------
+# Real Arduino connection
+# -----------------------------------------------------------------------------
+# Opens serial connection to the Arduino
+ser = serial.Serial("COM3", 9600)
+
+# Gives the Arduino time to reset
+time.sleep(2)
+
+# -----------------------------------------------------------------------------
+# Data saving
+# -----------------------------------------------------------------------------
+
+# Storing the information about every pump currently dispensing.
+# This data is used to estimate the volume transferred if a pump is stopped before completing its target volume.
+active_pumps = {} 
+
+# CSV -------------------------------------------------------------------------
+
+try:
+    with open("pump_log.csv", "x", newline="") as file:
+
+        writer = csv.writer(file)
+
+        # Write the column headings
+        writer.writerow([
+            "timestamp",
+            "pump",
+            "volume_ml",
+            "completed"
+        ])
+
+# Do nothing in case the file already exists
+except FileExistsError:
+    pass
+
+# Saving the file
+def save_csv_log(pump, volume, completed):
+    """Records one dispensing operation in the CSV log.
+        Each row contains: a timestamp, pump identifier, 
+        transferred volume and information whether dispensing was completed successfully.
+        
+        Variables:
+        pump - Identifier of the used pump (A, B, C, D)
+        volume - volume transferred
+        completed- True if dispensing completed normally, False otherwise"""
+
+    # Opens the CSV file in append mode
+    with open("pump_log.csv", "a", newline="") as file:
+
+        writer = csv.writer(file)
+
+        # Writes one dispensing event
+        writer.writerow([datetime.now().isoformat(), pump, round(volume, 2), completed])
+
+
+# JSON ------------------------------------------------------------------------
+
+def load_JSON_log():
+    """ Opens the JSON log file and returns its contents.
+    If the file does not exist, a new data structure is created with empty totals and event history."""
+
+    try:
+        with open("pump_log.json", "r") as file:
+            return json.load(file)
+
+    except FileNotFoundError:
+
+        return {
+            "totals": {
+                "A": 0,
+                "B": 0,
+                "C": 0,
+                "D": 0
+            },
+
+            "total_volume_dispensed": 0,
+            "events": []
+        }
+
+# Saving the JSON file
+def save_JSON_log(data):
+    """Writes the current transfer statistics and event history to the JSON log file"""
+
+    with open("pump_log.json", "w") as file:
+        json.dump(data, file, indent=4)
+
+
+# -----------------------------------------------------------------------------
+# Tracking the transfer data
+# -----------------------------------------------------------------------------
+
+def log_transfer(pump, volume, completed):
+    """Updates both the JSON and CSV log files with information about a dispensing operation,
+    including the pump totals, overall transferred volume and the transfer history.
+    """
+
+    # Loading the JSON file
+    data = load_JSON_log() # Dictionary containing all of the transfer data
+
+    # Updating the selected pump total
+    data["totals"][pump] += volume
+
+    # Updating the overall transferred volume
+    data["total_volume_dispensed"] += volume
+
+    # Storing one transfer event
+    data["events"].append({
+        "timestamp": datetime.now().isoformat(),
+        "pump": pump,
+        "volume_mL": round(volume, 2),
+        "completed": completed,
+        "direction": "reverse" if volume < 0 else "forward"
+    })
+
+    # Saving the updated JSON file
+    save_JSON_log(data)
+
+    # Saving the updated csv file
+    save_csv_log(pump, volume, completed)
+
+# -----------------------------------------------------------------------------
+# Starting the pump
+# -----------------------------------------------------------------------------
+
+def start_pump(command, volume):
+    """Sends the selected pump command and target volume over the serial connection.
+    Information about the running pump is stored so that the transferred volume can later be estimated,
+    if the pump is stopped before completion."""
+
+    # Creating the command formatted for the Arduino (e.g. "A,5", "B,10")
+    serial_command = f"{command},{volume}"
+
+    print("Sending:", serial_command)
+
+    # Sendig the command
+    ser.write((serial_command + "\n").encode())
+
+    # Removing the R from the pump identifier if this is a reverse command
+    pump = command.removeprefix("R")
+
+    # Assigning the direction of the dispension
+    direction = -1 if command.startswith("R") else 1
+
+    # Storing information about the running pump
+    active_pumps[pump] = {
+        "start_time": time.time(),
+        "target_volume": volume,
+        "direction": direction
+    }
+
+# -----------------------------------------------------------------------------
+# Waiting for the Arduino to report a successful transfer
+# -----------------------------------------------------------------------------
+
+def wait_until_done(pump):
+    """Continuously monitors the serial connection until the Arduino sends the expected DONE message for the selected pump."""
+
+    while True:
+
+        if ser.in_waiting:
+            message = ser.readline().decode().strip()
+            print("Arduino:", message)
+            if message == f"DONE,{pump}":
+                break
+        time.sleep(0.05)
+
+# -----------------------------------------------------------------------------
+# Initialising the drop-wise dispensing
+# -----------------------------------------------------------------------------
+
+def start_pump_dropwise(command, total_volume):
+    """Splits a requested volume into multiple 0.5 mL doses.
+    A 30-second delay is inserted between each dose to achieve controlled dropwise dispensing (of an approximate rate of 1 mL/min).
+    Dispensing can be interrupted at any time using the corresponding threading Event, 
+    with the rate being customisable by varying the break interval time."""
+
+    pump = command.removeprefix("R")
+    dropwise_stop[pump].clear()
+
+    full_doses = int(total_volume // 0.5) # Number of full 0.5 mL doses
+    remainder = round(total_volume % 0.5, 3) # Final volume smaller than 0.5 mL to be dispensed last (in case the selected volume is not divisible by 0.5)
+
+    # Dispensing one complete 0.5 mL dose during each iteration
+    for i in range(full_doses):
+
+        # Stop check; exits immediately if a stop request has been received
+        if dropwise_stop[pump].is_set():
+            return
+
+        # Calling onto the dispension function using a set volume of 0.5 mL
+        start_pump(command, 0.5)
+
+        wait_until_done(pump)
+
+        # Wait up to 30 seconds before the next dose
+        # The wait ends early if a stop request is received
+        if i < full_doses - 1 or remainder > 0:
+            if dropwise_stop[pump].wait(30):
+                return
+
+    # Stop requested before the remainder
+    if dropwise_stop[pump].is_set():
+        return
+
+    if remainder > 0:
+        start_pump(command, remainder)
+        wait_until_done(pump)
+
+# -----------------------------------------------------------------------------
+# Individual pump stop
+# -----------------------------------------------------------------------------
+
+def stop_pump(pump):
+    """Stops the selected pump.
+    If the pump was dispensing, the elapsed runtime is converted into an estimated transferred volume 
+    using the pump calibration factor before logging the event."""
+
+    dropwise_stop[pump].set() # Sets the stop event to prevent any further dropwise doses
+
+    # If the pump is currently running, calculate the actual transferred volume
+    if pump in active_pumps:
+
+        # Tracking the time in ms for which the pump has been running
+        elapsed_time = (time.time() - active_pumps[pump]["start_time"]) * 1000
+
+        # Estimated transferred volume calculated using the runtime and calibration factors
+        actual_volume = (elapsed_time * CAL[pump] * active_pumps[pump]["direction"])
+
+        log_transfer(pump, actual_volume, completed=False)
+
+        del active_pumps[pump]
+        
+
+    # Sending a signal to Arduino to stop the pump
+    ser.write(f"S{pump}\n".encode())
+
+# -----------------------------------------------------------------------------
+# Overall pump stop
+# -----------------------------------------------------------------------------
+
+def stop_all_pumps():
+    """Stops all currently active pumps, records their estimated transferred volumes, 
+    cancels any active drop-wise dispensing operations and sends the global stop command to the Arduino."""
+
+    current_time = time.time()
+
+    # Loop through every running pump
+    for pump in list(active_pumps.keys()):
+
+        # Tracking the time in ms for which the pump has been running
+        elapsed_time = (current_time - active_pumps[pump]["start_time"]) * 1000
+
+        # Estimated transferred volume calculated using the runtime and calibration factors
+        actual_volume = (elapsed_time * CAL[pump] * active_pumps[pump]["direction"])
+
+        log_transfer(pump, actual_volume, completed=False)
+
+    active_pumps.clear()
+
+    for event in dropwise_stop.values():
+        event.set()
+    # Sending stop command to Arduino
+    ser.write(b"S\n")
+
+# -----------------------------------------------------------------------------
+# Shutting down the controller
+# -----------------------------------------------------------------------------
+
+def close():
+    """Stops all pumps before closing the serial connection, 
+    ensuring that no dispensing operation is left running."""
+
+    stop_all_pumps()
+    ser.close()
