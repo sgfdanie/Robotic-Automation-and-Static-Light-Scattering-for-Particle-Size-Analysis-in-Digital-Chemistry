@@ -1,0 +1,491 @@
+# Run the pump controller fuctions first to establish serial connection
+def setup():
+    print("Running the pyserial script")
+
+# ---------------------------------------------------------------------------
+# Imports
+# ---------------------------------------------------------------------------
+
+import json
+import csv
+import threading
+from dash import ctx
+from dash import Dash
+from dash import html
+from dash import dcc
+from dash import Input
+from dash import Output
+from dash import State
+
+# ---------------------------------------------------------------------------
+# Import the pump controller functions
+# ---------------------------------------------------------------------------
+
+from New_pyserial_peristaltic_pump_connection_code import (start_pump, start_pump_dropwise, stop_pump, stop_all_pumps, close)
+
+# ---------------------------------------------------------------------------
+# Loading/creating the json file
+# ---------------------------------------------------------------------------
+
+def load_JSON_log():
+    try:
+        with open("pump_log.json", "r") as file:
+            return json.load(file)
+
+    # If the file is not found, the program creates one with blank values
+    except FileNotFoundError:
+        return {
+            "totals": {
+                "A": 0,
+                "B": 0,
+                "C": 0,
+                "D": 0
+            },
+
+            "total_volume_dispensed": 0,
+            "events": []
+        }
+
+# ---------------------------------------------------------------------------
+# Creating the Dash application
+# ---------------------------------------------------------------------------
+
+app = Dash(__name__)
+app.title = "Peristaltic Pump Controller"
+
+# ---------------------------------------------------------------------------
+# GUI Layout
+# ---------------------------------------------------------------------------
+# Defining the graphical user interface (GUI) layout, including pump controls, status displays, and live monitoring widgets
+
+app.layout = html.Div([
+
+    # Title ------------------------------------------------------------------------
+
+    html.H1("Peristaltic Pump Controller", style={"textAlign": "center"}),
+
+    html.Hr(),
+
+    # Pump selection ------------------------------------------------------------------------
+    # Each block corresponding to a specific includes:
+    # - Pump selection checkbox
+    # - Volume input (mL)
+    # - Direction selector (Forward/Reverse)
+    # --------------------------------------------- Pump A ---------------------------------------------
+
+    html.Div([
+
+    # Selecting the pump with a checkbox
+    dcc.Checklist(
+        id="pumpA",
+        options=[{"label":"Pump A", "value":"A"}],
+        value=[],
+        style={"display":"inline-block","width":"150px"}
+    ),
+
+    # Selecting the volume
+    dcc.Input(
+        id="volumeA",
+        type="number",
+        placeholder="Volume (mL)",
+        style={"width":"120px"}
+    ),
+
+    # Direction selection
+    dcc.Dropdown(
+        id="directionA",
+        options=[{"label":"Forward","value":"forward"}, {"label":"Reverse","value":"reverse"}],
+        value="forward",
+        clearable=False,
+        style={"width":"140px", "display":"inline-block"}
+    )
+    ]),
+
+    # --------------------------------------------- Pump B ---------------------------------------------
+
+    html.Div([
+
+    # Selecting the pump with a checkbox
+    dcc.Checklist(
+        id="pumpB",
+        options=[{"label":"Pump B", "value":"B"}],
+        value=[],
+        style={"display":"inline-block","width":"150px"}
+    ),
+
+    # Selecting the volume
+    dcc.Input(
+        id="volumeB",
+        type="number",
+        placeholder="Volume (mL)",
+        style={"width":"120px"}
+    ),
+
+    # Direction selection
+    dcc.Dropdown(
+        id="directionB",
+        options=[{"label":"Forward","value":"forward"}, {"label":"Reverse","value":"reverse"}],
+        value="forward",
+        clearable=False,
+        style={"width":"140px", "display":"inline-block"}
+    )
+    ]),
+
+
+    # --------------------------------------------- Pump C ---------------------------------------------
+
+    html.Div([
+
+    # Selecting the pump with a checkbox
+    dcc.Checklist(
+        id="pumpC",
+        options=[{"label":"Pump C", "value":"C"}],
+        value=[],
+        style={"display":"inline-block","width":"150px"}
+    ),
+
+    # Selecting the volume
+    dcc.Input(
+        id="volumeC",
+        type="number",
+        placeholder="Volume (mL)",
+        style={"width":"120px"}
+    ),
+
+    # Direction selection
+    dcc.Dropdown(
+        id="directionC",
+        options=[{"label":"Forward","value":"forward"}, {"label":"Reverse","value":"reverse"}],
+        value="forward",
+        clearable=False,
+        style={"width":"140px", "display":"inline-block"}
+    )
+    ]),
+
+    # --------------------------------------------- Pump D ---------------------------------------------
+
+    html.Div([
+
+    # Selecting the pump with a checkbox
+    dcc.Checklist(
+        id="pumpD",
+        options=[{"label":"Pump D", "value":"D"}],
+        value=[],
+        style={"display":"inline-block","width":"150px"}
+    ),
+
+    # Selecting the volume
+    dcc.Input(
+        id="volumeD",
+        type="number",
+        placeholder="Volume (mL)",
+        style={"width":"120px"}
+    ),
+
+    # Direction selection
+    dcc.Dropdown(
+        id="directionD",
+        options=[{"label":"Forward","value":"forward"}, {"label":"Reverse","value":"reverse"}],
+        value="forward",
+        clearable=False,
+        style={"width":"140px", "display":"inline-block"}
+    )
+    ]),
+
+    # Drop-wise dispensing button --------------------------------------------------------------------
+    dcc.Checklist(
+    id="dropwise",
+    options=[
+        {
+            "label": "Drop-wise addition (0.5 mL every 30 s)",
+            "value": "ON"
+        }
+    ],
+    value=[]
+    ),
+
+    # Dispense button --------------------------------------------------------------------
+    html.Button(
+    "DISPENSE",
+    id="start-button"
+    ),
+
+    # Stop buttons ------------------------------------------------------------------------
+
+    html.H3("Stop Pumps"),
+    html.Button("Stop A", id="stopA"),
+    html.Button("Stop B", id="stopB"),
+    html.Button("Stop C", id="stopC"),
+    html.Button("Stop D", id="stopD"),
+
+    html.Br(),
+    html.Br(),
+
+    html.Button("STOP ALL", id="stopAll"),
+
+    html.Hr(),
+
+    # Pump totals ------------------------------------------------------------------------
+
+    html.H2("Dispensed Volumes"),
+    html.Div(id="pump-totals"),
+    html.Br(),
+    html.Div(id="overall-total"),
+    html.Hr(),
+
+    # Recent activity ------------------------------------------------------------------------
+
+    html.H2("Recent Activity"),
+    html.Div(id="recent-events"),
+
+    # Refresh timer ------------------------------------------------------------------------
+
+    dcc.Interval(
+        id="refresh",
+        interval=1000,
+        n_intervals=0
+    ),
+
+    # Status display ------------------------------------------------------------------------
+
+    html.H3("Status"),
+
+    html.Div(
+        "Ready",
+        id="status-message",
+        style={
+            "border": "1px solid black",
+            "padding": "10px",
+            "minHeight": "30px"
+        }
+    ),
+
+    
+],
+style={
+    "width": "800px",
+    "margin": "auto",
+    "fontFamily": "Arial"
+})
+
+# ---------------------------------------------------------------------------
+# Overall callback
+# ---------------------------------------------------------------------------
+# Main callback for handling all user control actions.
+# Depending on which button triggered the callback, this function:
+# - Starts selected pumps
+# - Stops an individual pump
+# - Stops all pumps
+# - Updates the status message
+@app.callback(
+
+    Output("status-message", "children"),
+
+    Input("start-button", "n_clicks"),
+    Input("stopA", "n_clicks"),
+    Input("stopB", "n_clicks"),
+    Input("stopC", "n_clicks"),
+    Input("stopD", "n_clicks"),
+    Input("stopAll", "n_clicks"),
+
+    State("pumpA", "value"),
+    State("volumeA", "value"),
+    State("directionA", "value"),
+
+    State("pumpB", "value"),
+    State("volumeB", "value"),
+    State("directionB", "value"),
+
+    State("pumpC", "value"),
+    State("volumeC", "value"),
+    State("directionC", "value"),
+
+    State("pumpD", "value"),
+    State("volumeD", "value"),
+    State("directionD", "value"),
+
+    State("dropwise", "value"),
+
+    prevent_initial_call=True
+
+)
+
+def control_callback(
+
+    clicks_start,
+    clicks_stopA,
+    clicks_stopB,
+    clicks_stopC,
+    clicks_stopD,
+    clicks_stopAll,
+
+    pumpA, volumeA, directionA,
+    pumpB, volumeB, directionB,
+    pumpC, volumeC, directionC,
+    pumpD, volumeD, directionD,
+
+    dropwise
+
+):
+
+    button = ctx.triggered_id
+
+
+    # Dispensing-------------------------------
+
+    if button == "start-button":
+
+        started = []
+
+        if pumpA and volumeA is not None:
+            command = "RA" if directionA == "reverse" else "A"
+
+            if "ON" in dropwise:
+
+                threading.Thread(
+                    target=start_pump_dropwise,
+                    args=(command, volumeA),
+                    daemon=True
+                ).start()
+
+            else:
+                start_pump(command, volumeA)
+
+            started.append("Pump A")
+
+
+        if pumpB and volumeB is not None:
+
+            command = "RB" if directionB == "reverse" else "B"
+
+            if "ON" in dropwise:
+
+                threading.Thread(
+                    target=start_pump_dropwise,
+                    args=(command, volumeB),
+                    daemon=True
+                ).start()
+
+            else:
+                start_pump(command, volumeB)
+
+            started.append("Pump B")
+
+
+        if pumpC and volumeC is not None:
+
+            command = "RC" if directionC == "reverse" else "C"
+
+            if "ON" in dropwise:
+
+                threading.Thread(
+                    target=start_pump_dropwise,
+                    args=(command, volumeC),
+                    daemon=True
+                ).start()
+
+            else:
+                start_pump(command, volumeC)
+
+            started.append("Pump C")
+
+
+        if pumpD and volumeD is not None:
+
+            command = "RD" if directionD == "reverse" else "D"
+
+            if "ON" in dropwise:
+
+                threading.Thread(
+                    target=start_pump_dropwise,
+                    args=(command, volumeD),
+                    daemon=True
+                ).start()
+
+            else:
+                start_pump(command, volumeD)
+
+            started.append("Pump D")
+
+
+        if len(started) == 0:
+
+            return "No pumps selected."
+
+        return "Started: " + ", ".join(started)
+
+
+    # Stop button --------------------------------
+
+    elif button == "stopA":
+        stop_pump("A")
+        return "Pump A stopped."
+
+
+    elif button == "stopB":
+        stop_pump("B")
+        return "Pump B stopped."
+
+
+    elif button == "stopC":
+        stop_pump("C")
+        return "Pump C stopped."
+
+
+    elif button == "stopD":
+        stop_pump("D")
+        return "Pump D stopped."
+
+
+    elif button == "stopAll":
+        stop_all_pumps()
+        return "All pumps stopped."
+
+    return "Ready"
+
+
+# ---------------------------------------------------------------------------
+# Live Volume Display Callback
+# ---------------------------------------------------------------------------
+@app.callback(
+
+    Output("overall-total","children"),
+    Output("pump-totals","children"),
+    Input("refresh","n_intervals")
+)
+
+def update_volume_display(n):
+
+    # Load the latest JSON log
+    data = load_JSON_log()
+
+    # Get total transferred volume
+    total = data["total_volume_dispensed"]
+
+    # Get individual pump totals
+    pump_data = data["totals"]
+
+    total_text = (
+        f"Total Volume Dispensed: "
+        f"{round(total,2)} mL"
+    )
+
+    pump_text = (
+        f"""
+        Pump A: {round(pump_data["A"],2)} mL
+        Pump B: {round(pump_data["B"],2)} mL
+        Pump C: {round(pump_data["C"],2)} mL
+        Pump D: {round(pump_data["D"],2)} mL
+        """
+    )
+
+    return total_text, pump_text
+
+# ---------------------------------------------------------------------------
+# Starting the Dash Application 
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    try:
+        app.run(debug=False)
+    finally:
+        close()
