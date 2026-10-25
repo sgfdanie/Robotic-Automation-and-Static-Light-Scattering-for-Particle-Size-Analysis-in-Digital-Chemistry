@@ -181,8 +181,8 @@ Do not run unattended experiments until safe stopping, error handling, calibrati
 - **Serial port:** `COM5` is hard-coded in the supplied Python pump-control code; update it for the target computer.
 - **Hardware validation:** Verify motor-driver wiring, power/current limits, direction logic, and safe-stop behaviour on the actual system.
 - **Calibration:** Validate every pump under actual operating conditions.
-- **UR5e template:** The template references `camera.py`; ensure the module and required robot environment are available before using it.
-- **Dependencies and testing:** `requirements.txt` lists the direct external Python packages identified in the supplied files. A pinned, tested environment and automated test suite are not currently provided.
+- **UR5e integration code: The integration template should not be run as an executable program but used as a visual guide to how the code should be structured. The pump commands can be directly copied, pasted and modified in an actual integration framework.
+- **Practical UR5e integration: Specific dispensing operations are not currently working within the integrated robotic framework, due to serial time-out issues. Currently employable fix is to disconnect and re-connect the Arduino before and after each dispensing command is defined, however short term, repeated dispensing, such as using the drop-wise function does not have a long term, reliable fix.
 
 ## Safety
 
@@ -195,3 +195,4 @@ This liquid-handling system is one part of the wider project on robotic automati
 ## Repository
 
 [Robotic Automation and Static Light Scattering for Particle Size Analysis in Digital Chemistry](https://github.com/sgfdanie/Robotic-Automation-and-Static-Light-Scattering-for-Particle-Size-Analysis-in-Digital-Chemistry)
+
