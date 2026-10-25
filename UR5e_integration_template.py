@@ -6,7 +6,7 @@
 import time
 import threading
 
-from pyserial_main_code_v2 import (
+from pyserial_main_code import (
     pump_connect,
     prime_pump,
     empty_pump,
