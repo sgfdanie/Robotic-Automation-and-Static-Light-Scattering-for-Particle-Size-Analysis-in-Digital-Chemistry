@@ -1,0 +1,571 @@
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+
+// ----------------------------------------------------------------------------
+// LCD
+// ----------------------------------------------------------------------------
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+// ----------------------------------------------------------------------------
+// LCD DISPLAY FUNCTIONS
+// ----------------------------------------------------------------------------
+
+void updateLCD() {
+
+    lcd.clear();
+
+    lcd.setCursor(0, 0);
+    lcd.print("Pumps: ");
+
+    bool anyRunning = false;
+
+    if (pumpA.running) {
+        lcd.print("A ");
+        anyRunning = true;
+    }
+
+    if (pumpB.running) {
+        lcd.print("B ");
+        anyRunning = true;
+    }
+
+    if (pumpC.running) {
+        lcd.print("C ");
+        anyRunning = true;
+    }
+
+    if (pumpD.running) {
+        lcd.print("D ");
+        anyRunning = true;
+    }
+
+    lcd.setCursor(0, 1);
+
+    if (anyRunning) {
+        lcd.print("Running...");
+    }
+    else {
+        lcd.print("System Ready");
+    }
+}
+
+
+// ----------------------------------------------------------------------------
+// DRI0039 MOTOR DRIVER PIN DEFINITIONS
+// ----------------------------------------------------------------------------
+// Motor 1 -> PWM D3,  Direction D4
+// Motor 2 -> PWM D11, Direction D12
+// Motor 3 -> PWM D5,  Direction D8
+// Motor 4 -> PWM D6,  Direction D7
+
+#define PUMP_A_PWM  3
+#define PUMP_A_DIR  4
+
+#define PUMP_B_PWM  11
+#define PUMP_B_DIR  12
+
+#define PUMP_C_PWM  5
+#define PUMP_C_DIR  8
+
+#define PUMP_D_PWM  6
+#define PUMP_D_DIR  7
+
+
+// ----------------------------------------------------------------------------
+// CALIBRATION FACTORS
+// ----------------------------------------------------------------------------
+// Units: mL per millisecond
+
+const float PUMP_A_CAL = 0.00119895;
+const float PUMP_B_CAL = 0.00125173;
+const float PUMP_C_CAL = 0.00124938;
+const float PUMP_D_CAL = 0.00128198;
+
+
+// ----------------------------------------------------------------------------
+// PUMP STATE STRUCTURE
+// ----------------------------------------------------------------------------
+
+struct pumpStat {
+    bool running;
+    int speed;
+    int pwmPin;
+    int dirPin;
+    unsigned long stopTime;
+};
+
+
+// ----------------------------------------------------------------------------
+// PUMP DEFINITIONS
+// ----------------------------------------------------------------------------
+
+pumpStat pumpA = {
+    false,
+    0,
+    PUMP_A_PWM,
+    PUMP_A_DIR,
+    0
+};
+
+pumpStat pumpB = {
+    false,
+    0,
+    PUMP_B_PWM,
+    PUMP_B_DIR,
+    0
+};
+
+pumpStat pumpC = {
+    false,
+    0,
+    PUMP_C_PWM,
+    PUMP_C_DIR,
+    0
+};
+
+pumpStat pumpD = {
+    false,
+    0,
+    PUMP_D_PWM,
+    PUMP_D_DIR,
+    0
+};
+
+
+// ----------------------------------------------------------------------------
+// DIRECTION CONTROL
+// ----------------------------------------------------------------------------
+// Motor X:
+//     Forward = LOW
+//     Reverse = HIGH
+
+bool getForwardDirection(pumpStat* pump) {
+
+    if (pump == &pumpA) return LOW;
+    if (pump == &pumpB) return HIGH;
+    if (pump == &pumpC) return LOW;
+    if (pump == &pumpD) return HIGH;
+
+    return LOW;
+}
+
+
+// ----------------------------------------------------------------------------
+// START MOTOR
+// ----------------------------------------------------------------------------
+// speed should be between 0 and 255.
+//
+// forward = true  -> forward
+// forward = false -> reverse
+
+void runMotor(pumpStat* pump, int speed, bool forward) {
+
+    bool forwardDirection = getForwardDirection(pump);
+
+    if (forward) {
+        digitalWrite(
+            pump->dirPin,
+            forwardDirection
+        );
+    }
+    else {
+        digitalWrite(
+            pump->dirPin,
+            !forwardDirection
+        );
+    }
+
+    analogWrite(
+        pump->pwmPin,
+        speed
+    );
+}
+
+
+// ----------------------------------------------------------------------------
+// STOP MOTOR
+// ----------------------------------------------------------------------------
+
+void stopMotor(pumpStat* pump) {
+
+    analogWrite(
+        pump->pwmPin,
+        0
+    );
+
+    pump->running = false;
+    pump->speed = 0;
+}
+
+
+// ----------------------------------------------------------------------------
+// STOP SELECTED PUMP
+// ----------------------------------------------------------------------------
+
+void stopPump(char selectedPump) {
+
+    pumpStat* pump;
+
+    if (selectedPump == 'A') {
+        pump = &pumpA;
+    }
+    else if (selectedPump == 'B') {
+        pump = &pumpB;
+    }
+    else if (selectedPump == 'C') {
+        pump = &pumpC;
+    }
+    else if (selectedPump == 'D') {
+        pump = &pumpD;
+    }
+    else {
+        return;
+    }
+
+    stopMotor(pump);
+
+    // Update the LCD
+    updateLCD();
+}
+
+
+// ----------------------------------------------------------------------------
+// STOP ALL PUMPS
+// ----------------------------------------------------------------------------
+
+void stopAllPumps() {
+
+    stopPump('A');
+    stopPump('B');
+    stopPump('C');
+    stopPump('D');
+
+    updateLCD();
+}
+
+
+// ----------------------------------------------------------------------------
+// UPDATE SINGLE PUMP TIMER
+// ----------------------------------------------------------------------------
+
+void updateSinglePump(pumpStat* pump) {
+
+    if (!pump->running) {
+        return;
+    }
+
+    if (millis() >= pump->stopTime) {
+
+        stopMotor(pump);
+
+        // Update LCD
+        updateLCD();
+
+        // Tell Python that the pump has finished
+
+        if (pump == &pumpA) {
+            Serial.println("DONE,A");
+        }
+        else if (pump == &pumpB) {
+            Serial.println("DONE,B");
+        }
+        else if (pump == &pumpC) {
+            Serial.println("DONE,C");
+        }
+        else if (pump == &pumpD) {
+            Serial.println("DONE,D");
+        }
+    }
+}
+
+
+// ----------------------------------------------------------------------------
+// UPDATE ALL PUMP TIMERS
+// ----------------------------------------------------------------------------
+
+void updatePumpTimers() {
+
+    updateSinglePump(&pumpA);
+    updateSinglePump(&pumpB);
+    updateSinglePump(&pumpC);
+    updateSinglePump(&pumpD);
+}
+
+
+// ----------------------------------------------------------------------------
+// START PUMP
+// ----------------------------------------------------------------------------
+//
+// Converts requested volume into a running time using the pump's
+// calibration factor.
+//
+// volume = mL
+// speed  = PWM value (0-255)
+// forward = direction
+
+void startPump(
+    char selectedPump,
+    float volume,
+    int speed,
+    bool forward
+) {
+
+    float cal_factor;
+    pumpStat* pump;
+
+
+    // ------------------------------------------------------------------------
+    // Select pump and calibration
+    // ------------------------------------------------------------------------
+
+    if (selectedPump == 'A') {
+
+        cal_factor = PUMP_A_CAL;
+        pump = &pumpA;
+
+    }
+    else if (selectedPump == 'B') {
+
+        cal_factor = PUMP_B_CAL;
+        pump = &pumpB;
+
+    }
+    else if (selectedPump == 'C') {
+
+        cal_factor = PUMP_C_CAL;
+        pump = &pumpC;
+
+    }
+    else if (selectedPump == 'D') {
+
+        cal_factor = PUMP_D_CAL;
+        pump = &pumpD;
+
+    }
+    else {
+        return;
+    }
+
+
+    // ------------------------------------------------------------------------
+    // Calculate required running time
+    // ------------------------------------------------------------------------
+
+    float runTime_ms = volume / cal_factor;
+
+
+    // ------------------------------------------------------------------------
+    // Start motor
+    // ------------------------------------------------------------------------
+
+    runMotor(pump, speed, forward);
+
+
+    // ------------------------------------------------------------------------
+    // Store pump state
+    // ------------------------------------------------------------------------
+
+    pump->running = true;
+    pump->speed = speed;
+
+    pump->stopTime = millis() + (unsigned long)runTime_ms;
+
+
+    // ------------------------------------------------------------------------
+    // Update LCD
+    // ------------------------------------------------------------------------
+
+    updateLCD();
+
+}
+
+
+// ----------------------------------------------------------------------------
+// SERIAL COMMAND HANDLING
+// ----------------------------------------------------------------------------
+//
+// Commands:
+//
+// A,5     -> Pump A forward, 5 mL
+// B,10    -> Pump B forward, 10 mL
+// C,2.5   -> Pump C forward, 2.5 mL
+//
+// RA,5    -> Pump A reverse, 5 mL
+// RB,10   -> Pump B reverse, 10 mL
+//
+// S       -> Stop all pumps
+// SA      -> Stop pump A
+// SB      -> Stop pump B
+// SC      -> Stop pump C
+// SD      -> Stop pump D
+
+void checkSerialCommands() {
+
+    if (Serial.available() <= 0) {
+        return;
+    }
+
+    String incomingData = Serial.readStringUntil('\n');
+
+    incomingData.trim();
+    incomingData.toUpperCase();
+
+
+    // ------------------------------------------------------------------------
+    // STOP COMMANDS
+    // ------------------------------------------------------------------------
+
+    if (incomingData == "S") {
+        stopAllPumps();
+        return;
+    }
+
+    if (incomingData == "SA") {
+        stopPump('A');
+        return;
+    }
+
+    if (incomingData == "SB") {
+        stopPump('B');
+        return;
+    }
+
+    if (incomingData == "SC") {
+        stopPump('C');
+        return;
+    }
+
+    if (incomingData == "SD") {
+        stopPump('D');
+        return;
+    }
+
+
+    // ------------------------------------------------------------------------
+    // Find comma
+    // ------------------------------------------------------------------------
+
+    int commaPosition =
+        incomingData.indexOf(',');
+
+    if (commaPosition == -1) {
+        return;
+    }
+
+
+    // ------------------------------------------------------------------------
+    // Separate pump command and volume
+    // ------------------------------------------------------------------------
+
+    String pumpText =
+        incomingData.substring(
+            0,
+            commaPosition
+        );
+
+    String volumeText =
+        incomingData.substring(
+            commaPosition + 1
+        );
+
+    float volume =
+        volumeText.toFloat();
+
+
+    // ------------------------------------------------------------------------
+    // REVERSE COMMAND
+    // ------------------------------------------------------------------------
+
+    if (pumpText.startsWith("R")) {
+
+        char selectedPump =
+            pumpText.charAt(1);
+
+        startPump(
+            selectedPump,
+            volume,
+            255,
+            false
+        );
+    }
+
+
+    // ------------------------------------------------------------------------
+    // FORWARD COMMAND
+    // ------------------------------------------------------------------------
+
+    else {
+
+        char selectedPump =
+            pumpText.charAt(0);
+
+        startPump(
+            selectedPump,
+            volume,
+            255,
+            true
+        );
+
+        // For testing a slower speed, you can change 255 to e.g.:
+        //
+        // 160
+        //
+        // startPump(selectedPump, volume, 160, true);
+    }
+}
+
+
+// ----------------------------------------------------------------------------
+// SETUP
+// ----------------------------------------------------------------------------
+
+void setup() {
+
+    // Motor PWM pins
+    pinMode(PUMP_A_PWM, OUTPUT);
+    pinMode(PUMP_B_PWM, OUTPUT);
+    pinMode(PUMP_C_PWM, OUTPUT);
+    pinMode(PUMP_D_PWM, OUTPUT);
+
+
+    // Motor direction pins
+    pinMode(PUMP_A_DIR, OUTPUT);
+    pinMode(PUMP_B_DIR, OUTPUT);
+    pinMode(PUMP_C_DIR, OUTPUT);
+    pinMode(PUMP_D_DIR, OUTPUT);
+
+
+    // Make sure all pumps start stopped
+    analogWrite(PUMP_A_PWM, 0);
+    analogWrite(PUMP_B_PWM, 0);
+    analogWrite(PUMP_C_PWM, 0);
+    analogWrite(PUMP_D_PWM, 0);
+
+
+    // Serial communication with Python
+    Serial.begin(9600);
+
+
+    // ------------------------------------------------------------------------
+    // Initialise LCD
+    // ------------------------------------------------------------------------
+
+    lcd.init();
+    lcd.backlight();
+
+    showSystemReady();
+
+    Serial.println("System Ready.");
+}
+
+
+// ----------------------------------------------------------------------------
+// MAIN LOOP
+// ----------------------------------------------------------------------------
+
+void loop() {
+
+    checkSerialCommands();
+
+    updatePumpTimers();
+}
