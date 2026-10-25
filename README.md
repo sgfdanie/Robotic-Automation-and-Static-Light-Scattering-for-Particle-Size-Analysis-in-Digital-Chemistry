@@ -176,7 +176,7 @@ Treat these as starting values, not guaranteed accuracy. Recalibrate each pump w
 Do not run unattended experiments until safe stopping, error handling, calibration, and the full workflow have been validated.
 
 ## Known Issues and Checks
-
+- **GUI does not launch: Comment the currently enabled start-up logic near the bottom of the pump_main_GUI.py and uncomment the one below it, launching it in the terminal.
 - **LCD library compatibility:** Confirm the installed `LiquidCrystal_I2C` library supports `lcd.init()`. Library variants differ.
 - **Serial port:** `COM5` is hard-coded in the supplied Python pump-control code; update it for the target computer.
 - **Hardware validation:** Verify motor-driver wiring, power/current limits, direction logic, and safe-stop behaviour on the actual system.
